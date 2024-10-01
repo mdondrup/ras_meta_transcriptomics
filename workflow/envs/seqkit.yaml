@@ -1,0 +1,6 @@
+name: seqkit
+channels:
+- bioconda
+dependencies:
+- seqkit=2.8.2=h9ee0642_1
+
