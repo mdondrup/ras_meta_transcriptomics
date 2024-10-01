@@ -2,7 +2,7 @@
 
 
 ## Where to import the reference genome from
-import_ref_dir: "/export/dahlefs/work/Marie/sequences_novogen/X204SC23041757-Z01-F001/15.PROKKA_METAGENOME"
+import_ref_dir: "/import/from_a directory with PROKKA output here/"
 reference_fasta: "input/reference/reference.fasta"
 reference_gff: "input/reference/reference.gff"
 
