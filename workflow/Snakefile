@@ -2,3 +2,117 @@
 # Please follow the best practices: 
 # https://snakemake.readthedocs.io/en/stable/snakefiles/best_practices.html,
 # in particular regarding the standardized folder structure mentioned there. 
+import os
+
+
+WORKFLOW_NAME="RAS Meta-transcriptomics"
+
+configfile: "config/config.yaml"
+
+from snakemake.utils import min_version
+min_version("8.14") 
+
+INPUTFASTQ="input/fastq"
+REF="input/reference"
+REF_FASTA=config["reference_fasta"]
+REF_GFF=config["reference_gff"]
+
+
+#include: "rules/setup.smk"
+
+
+onsuccess:
+    print( WORKFLOW_NAME+" finished, no error")
+    shell("send_message.py '" + WORKFLOW_NAME + " finished, no error'") # comment out this line if you don't have a messenger script
+onerror:
+    print("An error occurred, see the log")
+    shell("send_message.py 'An error occured in " + WORKFLOW_NAME + ", see the log: {log}'")
+    
+onstart:    
+    print ("----------------------------------------------------------------------------")
+    print ("Starting " + WORKFLOW_NAME)
+    print ("Looking for fastq files in " + INPUTFASTQ)
+    print ("Looking for a single reference fasta and reference annotation files in GFF3 format: " + REF_FASTA +" and "+ REF_GFF  )
+    print ("If your meta-genome annotation in distributed over multiple files, you have to import them with rule 'import_reference'")
+
+    print ("----------------------------------------------------------------------------")
+    shell ('send_message.py "' + WORKFLOW_NAME + ' started at $(date)"') # comment out this line if you don't have a messenger script
+
+## Capture all output    
+
+rule all:
+    #input: setup=".setup_complete"
+
+
+
+
+refdir=config["import_ref_dir"]  
+
+# Function to get all fastq files in each fastq_pass directory
+               
+
+
+def get_reference_fastas(refdir):
+    res = {'samples':[], 'fnas':[], 'gffs':[]}
+    check = {}
+    for di in os.listdir(refdir):        
+        if (os.path.isdir(os.path.join(refdir,di))):            
+            for fi in os.listdir(os.path.join(refdir,di)) :
+                if fi.endswith(".fna"):
+                    res['samples'] += [di]
+                    res['fnas'] += [fi]
+                if fi.endswith('gff'):
+                    res['gffs'] += [fi]                     
+    return (res)
+            
+
+ref_fnas=get_reference_fastas(refdir)
+print (ref_fnas)
+
+
+ 
+
+### These rules are deliberately detached from the rest of the workflow because the contig renaming is
+### very application specific
+
+rule import_reference:
+    conda: "envs/agat.yaml"
+    input: fnas=expand("input/reference/renamed-{sample}-contigs-{fna}", zip, sample=ref_fnas['samples'], fna=ref_fnas['fnas']),
+           gffs=expand("input/reference/renamed-{sample}-annotation-{gff}", zip, sample=ref_fnas['samples'], gff=ref_fnas['gffs'])
+    output: ".reference_imported" # [REF_FASTA, REF_GFF] ## This is left empty to prevent automatic invocation by the main WF
+    log: "logs/agat_sp_merge_annotations.log"
+    message: "Importing reference files {input} and renaming contigs." 
+    shell:
+        r"""
+        cat {input.fnas} > input/reference/reference.fasta
+        gffs=( {input.gffs} )
+        gffs=( "${{gffs[@]/#/ --gff }}" )
+	rm -f input/reference/reference.gff # agat won't overwrite
+        agat_sp_merge_annotations.pl ${{gffs[@]}} --out input/reference/reference.gff > {log} 2>&1
+        touch .reference_imported
+        """
+
+
+rule import_one_fasta:
+    conda: "envs/seqkit.yaml"
+    input: refdir+"/{sample}/{fna}"
+    output:  "input/reference/renamed-{sample}-contigs-{fna}"
+    message: "Importing {input} and prepending {wildcards.sample} to contig names"
+    threads: 1         
+    shell:
+        r"""
+        #echo Importing {output} and pre-pending {wildcards.sample} to contig names
+        cat {input} | seqkit replace -p ^ -r {wildcards.sample}- > {output}           
+        """
+
+rule import_one_gff:
+    input: refdir+"/{sample}/{gff}"
+    output:  "input/reference/renamed-{sample}-annotation-{gff}"
+    message: "Importing {input} and prepending {wildcards.sample} to landmark names. Feature IDs must be unique over all GFF files and this is not checked."
+    shell:
+        r"""
+        cat {input} | \
+        awk '/##sequence-region/ {{ $2="{wildcards.sample}-"$2}}1' | \
+        awk  -v FS='\t' -v OFS='\t' '!/#/ {{ $1="{wildcards.sample}-"$1}}1' > {output}
+        
+        """
