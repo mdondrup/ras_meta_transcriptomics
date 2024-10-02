@@ -46,7 +46,8 @@ rule all:
 
 
 
-refdir=config["import_ref_dir"]  
+refdir=config["import_ref_dir"]
+to_exclude=config["import_ref_exclude"] ## provide a list of reference directories to skip
 
 # Function to get all fastq files in each fastq_pass directory
                
@@ -55,7 +56,12 @@ refdir=config["import_ref_dir"]
 def get_reference_fastas(refdir):
     res = {'samples':[], 'fnas':[], 'gffs':[]}
     check = {}
-    for di in os.listdir(refdir):        
+    # print ("Excluding directories: "+ str(to_exclude))
+    for di in os.listdir(refdir):
+        # print("looking into directory "+di)
+        if (di in to_exclude):
+            print(" - excluding: "+ di + " from reference import" )
+            continue
         if (os.path.isdir(os.path.join(refdir,di))):            
             for fi in os.listdir(os.path.join(refdir,di)) :
                 if fi.endswith(".fna"):
@@ -65,15 +71,19 @@ def get_reference_fastas(refdir):
                     res['gffs'] += [fi]                     
     return (res)
             
-
-ref_fnas=get_reference_fastas(refdir)
-print (ref_fnas)
+if(refdir):
+    ref_fnas=get_reference_fastas(refdir)
+#print (ref_fnas)
 
 
  
 
 ### These rules are deliberately detached from the rest of the workflow because the contig renaming is
-### very application specific
+### very case-specific.
+### The importer can merge multiple genome annotations into one.
+### We assume here that the annotation files are bundled in a separate subdirectory of the import directory each,
+### one directory per sample or OTU. The directory name determines the genome prefix.
+### A single file with the extension .fna and gff are expected per genome/OTU
 
 rule import_reference:
     conda: "envs/agat.yaml"
@@ -81,7 +91,7 @@ rule import_reference:
            gffs=expand("input/reference/renamed-{sample}-annotation-{gff}", zip, sample=ref_fnas['samples'], gff=ref_fnas['gffs'])
     output: ".reference_imported" # [REF_FASTA, REF_GFF] ## This is left empty to prevent automatic invocation by the main WF
     log: "logs/agat_sp_merge_annotations.log"
-    message: "Importing reference files {input} and renaming contigs." 
+    message: "Importing reference files {input}, renaming contigs and merging GFF files. See the log for potential problems: {log}" 
     shell:
         r"""
         cat {input.fnas} > input/reference/reference.fasta
@@ -108,11 +118,14 @@ rule import_one_fasta:
 rule import_one_gff:
     input: refdir+"/{sample}/{gff}"
     output:  "input/reference/renamed-{sample}-annotation-{gff}"
-    message: "Importing {input} and prepending {wildcards.sample} to landmark names. Feature IDs must be unique over all GFF files and this is not checked."
+    message: "Importing {input} and prepending {wildcards.sample} to landmark names. Feature IDs must be unique over all GFF files. FASTA sequences in GFF input will be removed!"
     shell:
         r"""
-        cat {input} | \
-        awk '/##sequence-region/ {{ $2="{wildcards.sample}-"$2}}1' | \
+       
+        ## prepend the identifier to ##sequence-region tags
+        ## if the gff file contains FASTA sequences (Following ##FASTA or '>') they will be ignored 
+        awk '/^##FASTA/{{exit 0}}; /^>/{{exit 0}}; /##sequence-region/ {{ $2="{wildcards.sample}-"$2}}1' {input} | \
+        ## prepend the identifier to each feature line
         awk  -v FS='\t' -v OFS='\t' '!/#/ {{ $1="{wildcards.sample}-"$1}}1' > {output}
         
         """
