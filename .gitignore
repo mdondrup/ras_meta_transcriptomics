@@ -4,6 +4,11 @@ logs/**
 .snakemake
 .snakemake/**
 misc/**
+fastp/**
+idx/**
+input/**
+multiqc_report/**
+rRNA_databases_v4/
 *\~
 #*#
 .[#]*[#]

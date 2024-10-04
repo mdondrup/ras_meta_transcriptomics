@@ -3,7 +3,7 @@
 # https://snakemake.readthedocs.io/en/stable/snakefiles/best_practices.html,
 # in particular regarding the standardized folder structure mentioned there. 
 import os
-
+import re
 
 WORKFLOW_NAME="RAS Meta-transcriptomics"
 
@@ -12,13 +12,14 @@ configfile: "config/config.yaml"
 from snakemake.utils import min_version
 min_version("8.14") 
 
-INPUTFASTQ="input/fastq"
+FASTQ_DIR="input/fastq"
 REF="input/reference"
 REF_FASTA=config["reference_fasta"]
 REF_GFF=config["reference_gff"]
+FQ_SUF=config["fastq_file_suffix"]
 
 
-#include: "rules/setup.smk"
+include: "rules/setup.smk"
 
 
 onsuccess:
@@ -31,19 +32,58 @@ onerror:
 onstart:    
     print ("----------------------------------------------------------------------------")
     print ("Starting " + WORKFLOW_NAME)
-    print ("Looking for fastq files in " + INPUTFASTQ)
+    print ("Looking for fastq files in " + FASTQ_DIR)
     print ("Looking for a single reference fasta and reference annotation files in GFF3 format: " + REF_FASTA +" and "+ REF_GFF  )
     print ("If your meta-genome annotation in distributed over multiple files, you have to import them with rule 'import_reference'")
 
     print ("----------------------------------------------------------------------------")
     shell ('send_message.py "' + WORKFLOW_NAME + ' started at $(date)"') # comment out this line if you don't have a messenger script
 
-## Capture all output    
 
+# Function to get sample names by trimming suffixes from filenames
+def get_samples():    
+    samples = list(set(['_'.join(f.split('_')[0:2]) for f in os.listdir(FASTQ_DIR) if f.endswith(FQ_SUF)]))
+    if not samples:
+        raise FileNotFoundError("No FASTQ files found in the directory " + FASTQ_DIR + ".(Looking for suffix: " + FQ_SUF )
+    return samples
+
+# Function to get the R1 and R2 fastq files for paired-end samples
+def get_illumina_fastqs(wildcards):
+    r1 = [os.path.join(FASTQ_DIR, f) for f in os.listdir(FASTQ_DIR)
+          if re.search('^' + wildcards.sample + ".*_1\\.fq\\.gz$", f)]
+    r2 = [os.path.join(FASTQ_DIR, f) for f in os.listdir(FASTQ_DIR)
+          if re.search('^' + wildcards.sample + ".*_2\\.fq\\.gz$", f)]
+    if r1 and r2:
+        return [r1[0], r2[0]]
+    else:
+        raise FileNotFoundError("No FASTQ files found for sample {wildcards.sample} or files not paired.")
+
+
+    
+
+    
+
+# Getting the samples
+SAMPLES = get_samples()
+print("Found "+ str(len(SAMPLES)) +" samples:")
+print(SAMPLES)    
+
+    
+
+    
 rule all:
-    #input: setup=".setup_complete"
+    input:
+        ".setup_done",
+        expand("fastp/{sample}_1.trimmed.fq.gz", sample=SAMPLES),
+        expand("fastp/{sample}_2.trimmed.fq.gz", sample=SAMPLES),
+        expand("fastp/{sample}.fastp_report.html", sample=SAMPLES),
+        expand("fastp/{sample}.fastp_report.json", sample=SAMPLES),
+        expand("sortmerna/{sample}_sortmerna_pe_stats.log", sample=SAMPLES),
+        expand("aligned/{sample}_aln.sorted.bam", sample=SAMPLES),        
+        "multiqc_report/multiqc_report.html",
+        
 
-
+       
 
 
 refdir=config["import_ref_dir"]
@@ -76,14 +116,20 @@ if(refdir):
 #print (ref_fnas)
 
 
- 
 
+
+    
+
+
+
+################################################################################################################# 
 ### These rules are deliberately detached from the rest of the workflow because the contig renaming is
 ### very case-specific.
 ### The importer can merge multiple genome annotations into one.
 ### We assume here that the annotation files are bundled in a separate subdirectory of the import directory each,
 ### one directory per sample or OTU. The directory name determines the genome prefix.
 ### A single file with the extension .fna and gff are expected per genome/OTU
+#################################################################################################################
 
 rule import_reference:
     conda: "envs/agat.yaml"
@@ -120,12 +166,104 @@ rule import_one_gff:
     output:  "input/reference/renamed-{sample}-annotation-{gff}"
     message: "Importing {input} and prepending {wildcards.sample} to landmark names. Feature IDs must be unique over all GFF files. FASTA sequences in GFF input will be removed!"
     shell:
-        r"""
-       
+        r"""       
         ## prepend the identifier to ##sequence-region tags
         ## if the gff file contains FASTA sequences (Following ##FASTA or '>') they will be ignored 
         awk '/^##FASTA/{{exit 0}}; /^>/{{exit 0}}; /##sequence-region/ {{ $2="{wildcards.sample}-"$2}}1' {input} | \
         ## prepend the identifier to each feature line
-        awk  -v FS='\t' -v OFS='\t' '!/#/ {{ $1="{wildcards.sample}-"$1}}1' > {output}
-        
+        awk  -v FS='\t' -v OFS='\t' '!/#/ {{ $1="{wildcards.sample}-"$1}}1' > {output}      
         """
+
+##############################################################################
+
+
+# Rule: Adapter removal and quality trimming with fastp
+rule fastp_pe:
+    conda: "envs/fastp.yaml"
+    input:
+        lambda wildcards: get_illumina_fastqs(wildcards)
+    output:
+        r1="fastp/{sample}_1.trimmed.fq.gz",
+        r2="fastp/{sample}_2.trimmed.fq.gz",
+        html="fastp/{sample}.fastp_report.html",
+        json="fastp/{sample}.fastp_report.json"
+    threads: 16
+    shell:
+        r"""
+        fastp -w {threads} -i {input[0]} -I {input[1]} -o {output.r1} -O {output.r2} \
+        --qualified_quality_phred 20 --length_required 30  -j {output.json} -h {output.html}
+        """
+        
+# Rule: Generate MultiQC report
+rule multiqc:
+    conda: "envs/multiqc.yaml"
+    input:
+        expand("fastp/{sample}.fastp_report.json", sample=SAMPLES),
+        expand("sortmerna/{sample}_sortmerna_pe_stats.log", sample=SAMPLES),
+
+        expand("aligned/{sample}.aligned.bam", sample=SAMPLES),
+     #   expand("aligned/{sample}.filtered.bam", sample=SAMPLES),
+     #   expand("aligned/{sample}.coverage.txt", sample=SAMPLES),
+     #   expand("aligned/{sample}.genome_coverage.txt", sample=SAMPLES)
+    output:
+        "multiqc_report/multiqc_report.html"
+    shell:
+        """
+        multiqc -o multiqc_report --ignore ".*" .
+
+        """
+
+rule sortmerna_pe:
+    input:
+        reads=["fastp/{sample}_1.trimmed.fq.gz", "fastp/{sample}_2.trimmed.fq.gz"],
+        ref=["rRNA_databases_v4/smr_v4.3_default_db.fasta"]
+    output:
+        aligned=["sortmerna/{sample}_aligned_1.fq.gz", "sortmerna/{sample}_aligned_2.fq.gz"],
+        other=["sortmerna/{sample}_filtered_1.fq.gz", "sortmerna/{sample}_filtered_2.fq.gz"],
+        stats="sortmerna/{sample}_sortmerna_pe_stats.log",
+    params:
+        extra="--paired_in --out2 -blast 1 -num_alignments 1",
+    threads: 10
+    resources:
+        mem_mb=10000,  # amount of memory for building the index
+    log:
+        "logs/sortmerna/{sample}_reads_pe.log"
+    benchmark: "logs/sortmerna/{sample}_reads_pe.benchmark"
+    message: "Running SortmeRNA on sample {wildcards.sample}"           
+    wrapper:
+        "v4.6.0/bio/sortmerna"
+        
+rule minimap2_index:
+    input:
+        target=REF
+    output:
+        "{input1}.mmi"
+    log:
+        "logs/minimap2_index/{input1}.log"
+    params:
+        extra=""  # optional additional args
+    threads: 20
+    message: "Indexing reference sequence for minima2"         
+    wrapper:
+        "v4.6.0/bio/minimap2/index"        
+
+rule minimap2_bam_sorted:
+    input:
+        target=REF+".mmi",  # can be either genome index or genome fasta
+        query=["sortmerna/{sample}_filtered_1.fq.gz", "sortmerna/{sample}_filtered_2.fq.gz"],
+    output:
+        "aligned/{sample}_aln.sorted.bam",
+    log:
+        "logs/minimap2/{sample}.log"
+    benchmark: "benchmarks/minimap2/{sample}.benchmark"
+    params:
+        extra="-x map-pb",  # optional
+        sorting="coordinate",  # optional: Enable sorting. Possible values: 'none', 'queryname' or 'coordinate'
+        sort_extra="",  # optional: extra arguments for samtools/picard
+    threads: 20
+    message: "Running minimap2 on {wildcards.sample}"         
+    wrapper:
+        "v4.6.0/bio/minimap2/aligner"
+        
+
+

@@ -2,7 +2,8 @@
 
 
 ## Where to import the reference genome from
-import_ref_dir: "/path to Prokka output to import/"
+#import_ref_dir: "/path to Prokka output to import/"
+import_ref_dir: "/export/dahlefs/work/Marie/sequences_novogen/X204SC23041757-Z01-F001/15.PROKKA_METAGENOME/"
 ## skip the following directories:
 import_ref_exclude:
   - d_1_7
@@ -13,3 +14,6 @@ reference_gff: "input/reference/reference.gff"
 
 ## A sample sheet with annotation for all the smaples to be used
 sample_sheet: "config/sample_sheet.tsv"
+
+## The filename suffix for fastq files: fastq, fq, fastq.gz, or fq.gz
+fastq_file_suffix: ".fq.gz"
