@@ -79,9 +79,11 @@ rule all:
         expand("fastp/{sample}.fastp_report.html", sample=SAMPLES),
         expand("fastp/{sample}.fastp_report.json", sample=SAMPLES),
         expand("sortmerna/{sample}_sortmerna_pe_stats.log", sample=SAMPLES),
-        expand("aligned/{sample}_aln.sorted.bam", sample=SAMPLES),        
+        expand("aligned/{sample}.aln.sorted.bam", sample=SAMPLES),        
         "multiqc_report/multiqc_report.html",
-        
+        "results/allSamples.featureCounts",
+       
+    
 
        
 
@@ -120,16 +122,16 @@ if(refdir):
 
     
 
+"""
 
-
-################################################################################################################# 
 ### These rules are deliberately detached from the rest of the workflow because the contig renaming is
 ### very case-specific.
 ### The importer can merge multiple genome annotations into one.
 ### We assume here that the annotation files are bundled in a separate subdirectory of the import directory each,
 ### one directory per sample or OTU. The directory name determines the genome prefix.
 ### A single file with the extension .fna and gff are expected per genome/OTU
-#################################################################################################################
+
+"""
 
 rule import_reference:
     conda: "envs/agat.yaml"
@@ -173,9 +175,31 @@ rule import_one_gff:
         ## prepend the identifier to each feature line
         awk  -v FS='\t' -v OFS='\t' '!/#/ {{ $1="{wildcards.sample}-"$1}}1' > {output}      
         """
+REFS = config['metaquast_refs']
+##############################################################################
+# Rule: Checking the input assembly with metaQuast
+rule metaquast:
+    conda: "envs/metaquast.yaml",
+    input:
+        assm="input/reference/reference.fasta",
+        refs=expand("ncbi_dataset/data/{ref}.fna", ref=REFS)
+    output:
+        directory("results/metaQUAST")
+    params:
+        refs = config['metaquast_refs'],
+    threads: 60
+    message: "Running MetaQUAST on the reference assembly"
+    log: "logs/metaquast.log"         
+    shell:
+        r"""       
+        REFS="{input.refs}"
+        metaquast {input.assm} -r ${{REFS// /,}} -o {output} -t {threads} > {log} 2>&1    
+        """
+        
+        
+
 
 ##############################################################################
-
 
 # Rule: Adapter removal and quality trimming with fastp
 rule fastp_pe:
@@ -201,15 +225,17 @@ rule multiqc:
         expand("fastp/{sample}.fastp_report.json", sample=SAMPLES),
         expand("sortmerna/{sample}_sortmerna_pe_stats.log", sample=SAMPLES),
 
-        expand("aligned/{sample}.aligned.bam", sample=SAMPLES),
-     #   expand("aligned/{sample}.filtered.bam", sample=SAMPLES),
+        expand("aligned/{sample}.bamstats", sample=SAMPLES),
+        "results/allSamples.featureCounts.summary",
+       
+
      #   expand("aligned/{sample}.coverage.txt", sample=SAMPLES),
      #   expand("aligned/{sample}.genome_coverage.txt", sample=SAMPLES)
     output:
         "multiqc_report/multiqc_report.html"
     shell:
         """
-        multiqc -o multiqc_report --ignore ".*" .
+        multiqc --force -o multiqc_report --ignore ".*" fastp/ sortmerna/ aligned/ results/
 
         """
 
@@ -232,10 +258,16 @@ rule sortmerna_pe:
     message: "Running SortmeRNA on sample {wildcards.sample}"           
     wrapper:
         "v4.6.0/bio/sortmerna"
+
+        
+
+
+
+
         
 rule minimap2_index:
     input:
-        target=REF
+        target=REF_FASTA
     output:
         "{input1}.mmi"
     log:
@@ -243,27 +275,65 @@ rule minimap2_index:
     params:
         extra=""  # optional additional args
     threads: 20
-    message: "Indexing reference sequence for minima2"         
+    message: "Indexing reference sequence {input} for minimap2"         
     wrapper:
         "v4.6.0/bio/minimap2/index"        
 
+        
 rule minimap2_bam_sorted:
     input:
-        target=REF+".mmi",  # can be either genome index or genome fasta
+        target=REF_FASTA + ".mmi",  # can be either genome index or genome fasta
         query=["sortmerna/{sample}_filtered_1.fq.gz", "sortmerna/{sample}_filtered_2.fq.gz"],
     output:
-        "aligned/{sample}_aln.sorted.bam",
+        "aligned/{sample}.aln.sorted.bam",
     log:
         "logs/minimap2/{sample}.log"
     benchmark: "benchmarks/minimap2/{sample}.benchmark"
     params:
-        extra="-x map-pb",  # optional
+        extra="-ax sr",  # short-reads
         sorting="coordinate",  # optional: Enable sorting. Possible values: 'none', 'queryname' or 'coordinate'
         sort_extra="",  # optional: extra arguments for samtools/picard
     threads: 20
     message: "Running minimap2 on {wildcards.sample}"         
     wrapper:
         "v4.6.0/bio/minimap2/aligner"
+
+rule bamtools_stats:
+    input:
+        "aligned/{sample}.aln.sorted.bam",
+    output:
+        "aligned/{sample}.bamstats"
+    params:
+        "-insert" # optional summarize insert size data
+    log:
+        "logs/bamtools/stats/{sample}.log"
+    wrapper:
+        "v4.6.0/bio/bamtools/stats"        
         
 
 
+rule feature_counts_s2:
+    input:
+        # list of sam or bam files
+        samples=expand("aligned/{sample}.aln.sorted.bam", sample=SAMPLES),
+        annotation=REF_GFF,
+        # optional input
+        #chr_names="",           # implicitly sets the -A flag
+        #fasta="genome.fasta"    # implicitly sets the -G flag
+    output:
+        multiext(
+            "results/allSamples",
+            ".featureCounts",
+            ".featureCounts.summary"
+        ),
+    threads: 64
+    params:
+        strand=0,  # optional; strandness of the library (0: unstranded [default], 1: stranded, and 2: reversely stranded)
+        r_path="",  # implicitly sets the --Rpath flag
+        extra="-O -M --fraction -t gene -g locus_tag -s 2 -p",
+    log:
+        "logs/featureCounts.log",
+    wrapper:
+        "v4.6.0/bio/subread/featurecounts"
+
+        
