@@ -8,7 +8,8 @@ fastp/**
 idx/**
 input/**
 multiqc_report/**
-rRNA_databases_v4/
+rRNA_databases_v4/**
+ncbi_dataset/**
 *\~
 #*#
 .[#]*[#]
