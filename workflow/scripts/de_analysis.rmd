@@ -1,0 +1,211 @@
+---
+title: "RAS Meta-transcriptmics"
+output: html_notebook
+author: Michael Dondrup
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+params:
+   rmd: "de_analysis.rmd"
+output:
+  html_document:
+  highlight: tango
+  number_sections: no
+  theme: default
+  toc: yes
+  toc_depth: 3
+  toc_float:
+    collapsed: no
+    smooth_scroll: yes
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r echo=FALSE, warning=FALSE}
+library(DESeq2)
+library(rtracklayer)
+library(kableExtra)
+library(BiocParallel)
+library(readxl)
+```
+
+
+```{r}
+min.counts <- snakemake@params[["min_counts"]]
+min.samples <- snakemake@params[["min_samples"]]
+nthreads <- snakemake@threads
+meta.data.path <- snakemake@input[["meta_data"]]
+feature.count.path <- snakemake@input[["counts"]]
+gff.path <- snakemake@input[["gff"]]
+GOI <- c("") # Genes Of Interest
+
+raw.counts <- read.delim(file=feature.count.path, comment.char = "#")
+raw.mat <- as.matrix(raw.counts[-1:-6],rownames.force = T)
+row.names(raw.mat) <- raw.counts$Geneid
+dim(raw.mat)
+summary(raw.mat)
+zero.pct <- 100*sum(raw.mat == 0)/prod(dim(raw.mat))
+
+cat("% zero unfiltered: \n")
+zero.pct
+sum(rowSums(raw.mat) < 1)
+sum(colSums(raw.mat) <1 )
+raw.mat <- raw.mat[rowSums(raw.mat) >= min.counts, ]
+raw.mat <- raw.mat[rowSums(raw.mat >= min.counts) >= min.samples, ] # at least two samples
+dim(raw.mat)
+zero.pct <- 100*sum(raw.mat == 0)/prod(dim(raw.mat))
+cat("% zero in filtered raw counts: \n")
+zero.pct
+# fix colnames
+colnames(raw.mat) <- gsub("aligned.|.aln.sorted.bam", "", colnames(raw.mat))
+
+#View(raw.mat)
+```
+Read the annotation data from a GFF file and check for presence of POIs
+```{r}
+annot.gff3 <- import.gff3(gff.path)
+
+# restrict annotation search to type CDS
+```
+
+
+```{r}
+annot.gff3 <- annot.gff3[annot.gff3$type == 'CDS',]
+
+### Checking some terms of interest
+kable(data.frame(c(
+table(grep('ammonia monooxygenase', unlist(annot.gff3$product), perl = T, ignore.case = T, value=T)),
+table(grep('Hydroxylamine.*reductase', unlist(annot.gff3$product), perl = T, ignore.case = T, value=T)),
+table(grep('Nitrite.*ase', unlist(annot.gff3$product), perl = T, ignore.case = T, value=T))
+)), col.names = "gene.count")
+
+
+amo.a.ind <- grep('ammonia monooxygenase alpha', unlist(annot.gff3$product), perl = T, ignore.case = T)
+amo.b.ind <- grep('ammonia monooxygenase beta', unlist(annot.gff3$product), perl = T, ignore.case = T)
+har.ind <- grep('Hydroxylamine.*oxidoreductase', unlist(annot.gff3$product), perl = T, ignore.case = T)
+
+goi.a <- annot.gff3$ID[amo.a.ind]
+goi.b <- annot.gff3$ID[amo.b.ind]
+har <- annot.gff3$ID[har.ind]
+har <- intersect(har,rownames(raw.mat))
+
+```
+
+Read and process sampling sheet
+```{r}
+meta.data <- read_excel(meta.data.path, n_max = 37)
+col.data <- as.data.frame(meta.data)
+colnames(col.data) <- make.names(colnames(meta.data)) # fix colnames so they can be used in formula
+
+col.data$Sampling.date <- as.factor(col.data$Sampling.date)
+col.data$Sampling.Time <- as.factor(col.data$Sampling.Time)
+
+
+col.data[,"Treatment"] <- as.factor(col.data$Treatment..targeted.alkalinity.)
+raw.mat <- raw.mat[,col.data$Sample.ID] # reorder data columns in the order of rows in the sample sheet
+print(names(col.data))
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+register(MulticoreParam(workers=nthreads))
+
+dds <- DESeqDataSetFromMatrix(countData = round(raw.mat),
+                              colData = col.data,
+                              #design= ~ RAS_system + Sampling.Time + RAS_system:Sampling.Time
+															#design= ~ RAS_system + Sampling.Time,
+															design= ~ Sampling.Time,
+															)
+dds <- DESeq(dds, parallel = TRUE)
+resultsNames(dds) # lists the coefficients
+
+```
+
+
+```{r}
+res7_20 <- results(dds, contrast=c("Sampling.Time","1899-12-31 07:00:00", "1899-12-31 20:00:00"))
+summary(res7_20)
+res7_12 <- results(dds, contrast=c("Sampling.Time","1899-12-31 07:00:00", "1899-12-31 12:00:00"))
+summary(res7_12)
+res12_20 <- results(dds, contrast=c("Sampling.Time","1899-12-31 12:00:00", "1899-12-31 20:00:00"))
+summary(res12_20)
+
+my.res <- list(res7_12=res7_12, res7_20=res7_20, res12_20=res12_20)
+```
+
+Merge the results with annotation frames
+```{r}
+
+goi.filter <- function(res, annot, p.val = 0.05) {
+	res <- as.data.frame(res)
+	res <- cbind(ID=rownames(res), res)
+	res.m <- merge(data.frame(annot), res)
+  ind <- grepl('ammonia monooxygenase', (res.m$product), perl = T, ignore.case = T) |
+  (grepl('Hydroxylamine.*reductase', (res.m$product), perl = T, ignore.case = T)) |
+  (grepl('Nitrite.*ase', (res.m$product), perl = T, ignore.case = T))
+	return((res.m[ind & res.m$pvalue < p.val,]))
+}
+
+filt.list <- lapply(my.res, goi.filter, annot.gff3)
+
+df <- data.frame()
+for (l in names(filt.list)){
+	df <- rbind(df,cbind(contrast=l,filt.list[[l]]))
+}
+df 
+nams <- colnames(df)
+df <- data.frame(t(apply(df,1, function(x)(paste(x)) )))
+df
+colnames(df) <- nams
+df
+write.table(df, file = "~/Desktop/RAS/Time.sig.GOI", quote=F, sep = "\t")
+View(df)
+
+
+```
+Plot the genes of interest:
+
+```{r}
+dds <- estimateSizeFactors(dds)
+
+d <- plotCounts(dds, gene=c('KCGBGJEG_1251244'), intgroup="Sampling.Time", 
+                returnData=TRUE, normalized = TRUE)
+library("ggplot2")
+
+
+ggplot(d, aes(x=Sampling.Time, y=count)) + 
+  geom_point(position=position_jitter(w=0.1,h=0)) + 
+	geom_violin(fill=c('lightblue'),alpha=0.5) +
+	geom_boxplot(fill='orange', alpha=0.5, width=0.2)+
+	ggtitle('KCGBGJEG_1251244 (Ammonia monooxygenase gamma subunit)') +
+  scale_y_log10(breaks=c(25,100,400))
+
+for (g in ) {
+	print (g)
+d <- plotCounts(dds, gene=g, intgroup="Sampling.Time", 
+                returnData=TRUE, normalized = TRUE)
+
+p <- ggplot(d, aes(x=Sampling.Time, y=count)) + 
+  geom_point(position=position_jitter(w=0.1,h=0)) + 
+	geom_violin(fill=c('lightblue'),alpha=0.5) +
+	geom_boxplot(fill='orange', alpha=0.5, width=0.2)+
+	ggtitle(paste(g,'(Hydroxylamine oxidoreductase)')) +
+  scale_y_log10(breaks=c(25,100,400))
+print(p) 
+}
+
+
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

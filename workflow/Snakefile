@@ -69,8 +69,6 @@ print("Found "+ str(len(SAMPLES)) +" samples:")
 print(SAMPLES)    
 
     
-
-    
 rule all:
     input:
         ".setup_done",
@@ -82,11 +80,8 @@ rule all:
         expand("aligned/{sample}.aln.sorted.bam", sample=SAMPLES),        
         "multiqc_report/multiqc_report.html",
         "results/allSamples.featureCounts",
-       
-    
-
-       
-
+        "results/de_analysis.html",
+             
 
 refdir=config["import_ref_dir"]
 to_exclude=config["import_ref_exclude"] ## provide a list of reference directories to skip
@@ -98,9 +93,9 @@ to_exclude=config["import_ref_exclude"] ## provide a list of reference directori
 def get_reference_fastas(refdir):
     res = {'samples':[], 'fnas':[], 'gffs':[]}
     check = {}
-    # print ("Excluding directories: "+ str(to_exclude))
+    print ("Excluding directories: "+ str(to_exclude))
     for di in os.listdir(refdir):
-        # print("looking into directory "+di)
+        print("looking into directory "+di)
         if (di in to_exclude):
             print(" - excluding: "+ di + " from reference import" )
             continue
@@ -117,9 +112,6 @@ if(refdir):
     ref_fnas=get_reference_fastas(refdir)
 #print (ref_fnas)
 
-
-
-
     
 
 """
@@ -128,8 +120,8 @@ if(refdir):
 ### very case-specific.
 ### The importer can merge multiple genome annotations into one.
 ### We assume here that the annotation files are bundled in a separate subdirectory of the import directory each,
-### one directory per sample or OTU. The directory name determines the genome prefix.
-### A single file with the extension .fna and gff are expected per genome/OTU
+### one directory per sample or MAG. The directory name determines the genome prefix.
+### A single file with the extension .fna and gff are expected per genome/MAG
 
 """
 
@@ -336,4 +328,17 @@ rule feature_counts_s2:
     wrapper:
         "v4.6.0/bio/subread/featurecounts"
 
-        
+rule DE_analysis:
+    conda: "envs/deanalysis.yaml"
+    input:
+        counts="results/allSamples.featureCounts",
+        gff=REF_GFF,
+        meta_data="input/meta_data.xlsx"
+    output:
+        "results/de_analysis.html",
+    threads: 12
+    params:
+        min_counts=0,
+        min_samples=0
+    script:
+        "scripts/de_analysis.rmd"       
