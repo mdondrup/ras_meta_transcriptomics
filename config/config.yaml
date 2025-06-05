@@ -3,7 +3,7 @@
 
 ## Where to import the reference genome from
 #import_ref_dir: "/path to Prokka output to import/"
-import_ref_dir: "/export/dahlefs/work/Marie/sequences_novogen/X204SC23041757-Z01-F001/15.PROKKA_METAGENOME/"
+import_ref_dir: "/export/dahlefs/work/Marie/sequences_novogen/X204SC23041757-Z01-F001/15.PROKKA_METAGENOME"
 # import_ref_dir: "/export/dahlefs/work/Hakon/RASTOOLS/RNA_2024/14.MAG_ANNOTATION"
 
 ## skip the following directories:

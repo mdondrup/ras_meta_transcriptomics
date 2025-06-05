@@ -40,7 +40,7 @@ rule create_uniref_db:
 rule create_query_db:
     conda: "../envs/mmseqs2.yaml"
     input:
-        fasta="input/proteins.faa"
+        fasta="input/reference/proteins.fasta"
     output:
         db="results/query_mmseqs_db"
     shell:
@@ -73,7 +73,7 @@ rule search_mmseqs:
             --max-seqs 1 \
             --threads {threads} > {log} 2>&1
         mmseqs convertalis {input.query_db} {input.target_db} results/search_db {output.aln} \
-        --format-output "query,target,fident,qalnlen,qlen" > {log} 2>&1
+        --format-output "query,target,fident,qlen" > {log} 2>&1
         """
 
 # 6. Format the results as a simple mapping table

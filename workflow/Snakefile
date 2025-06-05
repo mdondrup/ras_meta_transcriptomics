@@ -103,7 +103,7 @@ def get_reference_fastas(refdir):
             continue
         if (os.path.isdir(os.path.join(refdir,di))):            
             for fi in os.listdir(os.path.join(refdir,di)) :
-                if file_prefix and not fi.beginswith(file_prefix): continue
+                if file_prefix and not fi.startswith(file_prefix): continue
                 if fi.endswith(".fna"):
                     res['samples'] += [di]
                     res['fnas'] += [fi]
