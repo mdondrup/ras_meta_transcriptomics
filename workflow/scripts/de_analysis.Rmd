@@ -1,10 +1,9 @@
 ---
 title: "RAS Meta-transcriptmics"
-output: html_notebook
 author: Michael Dondrup
 date: "`r format(Sys.time(), '%d %B, %Y')`"
 params:
-   rmd: "de_analysis.rmd"
+   rmd: "de_analysis.Rmd"
 output:
   html_document:
   highlight: tango
@@ -31,6 +30,8 @@ library(readxl)
 
 
 ```{r}
+if (!exists('snakemake'))
+  load('de_analysis.restart.rda', envir = parent.frame(), verbose = FALSE)
 min.counts <- snakemake@params[["min_counts"]]
 min.samples <- snakemake@params[["min_samples"]]
 nthreads <- snakemake@threads
@@ -38,7 +39,7 @@ meta.data.path <- snakemake@input[["meta_data"]]
 feature.count.path <- snakemake@input[["counts"]]
 gff.path <- snakemake@input[["gff"]]
 GOI <- c("") # Genes Of Interest
-
+save(snakemake, file='de_analysis.restart.rda')
 raw.counts <- read.delim(file=feature.count.path, comment.char = "#")
 raw.mat <- as.matrix(raw.counts[-1:-6],rownames.force = T)
 row.names(raw.mat) <- raw.counts$Geneid
@@ -109,10 +110,6 @@ print(names(col.data))
 
 ```{r}
 
-```
-
-```{r}
-
 register(MulticoreParam(workers=nthreads))
 
 dds <- DESeqDataSetFromMatrix(countData = round(raw.mat),
@@ -163,8 +160,8 @@ df <- data.frame(t(apply(df,1, function(x)(paste(x)) )))
 df
 colnames(df) <- nams
 df
-write.table(df, file = "~/Desktop/RAS/Time.sig.GOI", quote=F, sep = "\t")
-View(df)
+write.table(df, file = "results/Time.sig.GOI", quote=F, sep = "\t")
+#View(df)
 
 
 ```
@@ -185,7 +182,7 @@ ggplot(d, aes(x=Sampling.Time, y=count)) +
 	ggtitle('KCGBGJEG_1251244 (Ammonia monooxygenase gamma subunit)') +
   scale_y_log10(breaks=c(25,100,400))
 
-for (g in ) {
+for (g in c(har)) {
 	print (g)
 d <- plotCounts(dds, gene=g, intgroup="Sampling.Time", 
                 returnData=TRUE, normalized = TRUE)

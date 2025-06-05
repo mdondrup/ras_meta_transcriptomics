@@ -20,6 +20,7 @@ FQ_SUF=config["fastq_file_suffix"]
 
 
 include: "rules/setup.smk"
+include: "rules/unirefclusters.smk"
 
 
 onsuccess:
@@ -85,13 +86,14 @@ rule all:
 
 refdir=config["import_ref_dir"]
 to_exclude=config["import_ref_exclude"] ## provide a list of reference directories to skip
+file_prefix=config["reference_file_prefix"]
 
 # Function to get all fastq files in each fastq_pass directory
                
-
+# There must exist exactly 1 .fna, .faa, and .gff per directory
 
 def get_reference_fastas(refdir):
-    res = {'samples':[], 'fnas':[], 'gffs':[]}
+    res = {'samples':[], 'fnas':[], 'gffs':[], 'faas':[]}
     check = {}
     print ("Excluding directories: "+ str(to_exclude))
     for di in os.listdir(refdir):
@@ -101,23 +103,26 @@ def get_reference_fastas(refdir):
             continue
         if (os.path.isdir(os.path.join(refdir,di))):            
             for fi in os.listdir(os.path.join(refdir,di)) :
+                if file_prefix and not fi.beginswith(file_prefix): continue
                 if fi.endswith(".fna"):
                     res['samples'] += [di]
                     res['fnas'] += [fi]
                 if fi.endswith('gff'):
-                    res['gffs'] += [fi]                     
+                    res['gffs'] += [fi]
+                if fi.endswith('.faa'):
+                    res['faas'] += [fi]   
     return (res)
             
 if(refdir):
     ref_fnas=get_reference_fastas(refdir)
-#print (ref_fnas)
+    print (ref_fnas)
 
     
 
 """
 
 ### These rules are deliberately detached from the rest of the workflow because the contig renaming is
-### very case-specific.
+### very setup-specific.
 ### The importer can merge multiple genome annotations into one.
 ### We assume here that the annotation files are bundled in a separate subdirectory of the import directory each,
 ### one directory per sample or MAG. The directory name determines the genome prefix.
@@ -128,6 +133,7 @@ if(refdir):
 rule import_reference:
     conda: "envs/agat.yaml"
     input: fnas=expand("input/reference/renamed-{sample}-contigs-{fna}", zip, sample=ref_fnas['samples'], fna=ref_fnas['fnas']),
+           faas=expand(refdir+"/{sample}/{faa}", zip, sample=ref_fnas['samples'], faa=ref_fnas['faas']),
            gffs=expand("input/reference/renamed-{sample}-annotation-{gff}", zip, sample=ref_fnas['samples'], gff=ref_fnas['gffs'])
     output: ".reference_imported" # [REF_FASTA, REF_GFF] ## This is left empty to prevent automatic invocation by the main WF
     log: "logs/agat_sp_merge_annotations.log"
@@ -135,6 +141,7 @@ rule import_reference:
     shell:
         r"""
         cat {input.fnas} > input/reference/reference.fasta
+        cat {input.faas} > input/reference/proteins.fasta
         gffs=( {input.gffs} )
         gffs=( "${{gffs[@]/#/ --gff }}" )
 	rm -f input/reference/reference.gff # agat won't overwrite
@@ -335,10 +342,11 @@ rule DE_analysis:
         gff=REF_GFF,
         meta_data="input/meta_data.xlsx"
     output:
-        "results/de_analysis.html",
+        "results/de_analysis.html"
     threads: 12
+    log: "logs/de_analysis.log"
     params:
-        min_counts=0,
-        min_samples=0
+        min_counts=1,
+        min_samples=1
     script:
-        "scripts/de_analysis.rmd"       
+        "scripts/de_analysis.Rmd"       
