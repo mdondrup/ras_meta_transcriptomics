@@ -105,11 +105,13 @@ rule annotate_gff_with_uniref:
 
         with open(input.gff) as fin, open(output.gff, "w") as fout:
             for line in fin:
+                # Skip comments and non-CDS/gene features
                 if line.startswith("#"):
                     fout.write(line)
                     continue
                 cols = line.strip().split("\t")
-                if len(cols) != 9 or cols[2] != "CDS":
+                # Only process CDS and mRNA features, others don't have protein IDs
+                if len(cols) != 9 or cols[2] not in ["CDS"]:
                     fout.write(line)
                     continue
 
@@ -123,5 +125,8 @@ rule annotate_gff_with_uniref:
                     uniref_tag = f"uniref90={mapping[prot_id]}"
                     if "uniref90=" not in attributes:
                         attributes += ";" + uniref_tag
-                cols[8] = attributes
-                fout.write("\t".join(cols) + "\n")
+                    cols[8] = attributes
+                    # Write the modified line to the output GFF
+                    # We cannnot use genes without uniref90 annotation, so we skip them
+                    # else FeatureCounts will fail with "missiing attribute uniref90"
+                    fout.write("\t".join(cols) + "\n")

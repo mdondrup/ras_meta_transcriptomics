@@ -25,10 +25,10 @@ include: "rules/unirefclusters.smk"
 
 onsuccess:
     print( WORKFLOW_NAME+" finished, no error")
-    shell("send_message.py '" + WORKFLOW_NAME + " finished, no error'") # comment out this line if you don't have a messenger script
+    #shell("send_message.py '" + WORKFLOW_NAME + " finished, no error'") # comment out this line if you don't have a messenger script
 onerror:
     print("An error occurred, see the log")
-    shell("send_message.py 'An error occured in " + WORKFLOW_NAME + ", see the log: {log}'")
+    #shell("send_message.py 'An error occured in " + WORKFLOW_NAME + ", see the log: {log}'")
     
 onstart:    
     print ("----------------------------------------------------------------------------")
@@ -38,7 +38,7 @@ onstart:
     print ("If your meta-genome annotation in distributed over multiple files, you have to import them with rule 'import_reference'")
 
     print ("----------------------------------------------------------------------------")
-    shell ('send_message.py "' + WORKFLOW_NAME + ' started at $(date)"') # comment out this line if you don't have a messenger script
+    #shell ('send_message.py "' + WORKFLOW_NAME + ' started at $(date)"') # comment out this line if you don't have a messenger script
 
 
 # Function to get sample names by trimming suffixes from filenames
@@ -335,6 +335,32 @@ rule feature_counts_s2:
     wrapper:
         "v4.6.0/bio/subread/featurecounts"
 
+rule feature_counts_uniref90:
+    input:
+        # list of sam or bam files
+        samples=expand("aligned/{sample}.aln.sorted.bam", sample=SAMPLES),
+        annotation="results/reference_annotated.gff",
+        # optional input
+        #chr_names="",           # implicitly sets the -A flag
+        #fasta="genome.fasta"    # implicitly sets the -G flag
+    output:
+        multiext(
+            "results/allSamples_uniref90",
+            ".featureCounts",
+            ".featureCounts.summary"
+        ),
+    threads: 64
+    params:
+        strand=0,  # optional; strandness of the library (0: unstranded [default], 1: stranded, and 2: reversely stranded)
+        r_path="",  # implicitly sets the --Rpath flag
+        extra="-O -M --fraction -t CDS -g uniref90 -s 2 -p",
+    log:
+        "logs/featureCounts_uniref90.log",
+    message: "Running featureCounts with uniref90 annotation. See the log for details: {log}"
+    wrapper:
+        "v4.6.0/bio/subread/featurecounts"
+
+
 rule DE_analysis:
     conda: "envs/deanalysis.yaml"
     input:
@@ -350,3 +376,61 @@ rule DE_analysis:
         min_samples=1
     script:
         "scripts/de_analysis.Rmd"       
+
+rule DE_analysis_uniref90:
+    conda: "envs/deanalysis.yaml"
+    input:
+        counts="results/allSamples_uniref90.featureCounts",
+        gff="results/reference_annotated.gff",
+        meta_data="input/meta_data.xlsx"
+    output:
+        "results/de_analysis_uniref90.html"
+    threads: 12
+    log: "logs/de_analysis_uniref90.log"
+    params:
+        min_counts=1,
+        min_samples=1
+    script:
+        "scripts/de_analysis_uniref90.Rmd"
+
+# Speed up loading of the reference annotation in R by saving it as an RDA file after loading it once with GenomicFeatures. This is especially helpful if the annotation is large and needs to be loaded multiple times in downstream analysis.
+rule load_reference_annotation:
+    input:
+        "results/reference_annotated.gff"
+    output:
+        "results/reference_annotated.gff.rda"
+    conda: "envs/deanalysis.yaml"
+    message: "Loading the reference annotation into R and saving it as an RDA file for faster loading in downstream analysis. See the log for details: {log}"
+    log: "logs/load_reference_annotation.log"
+    shell:
+        r"""
+        Rscript -e 'library(rtracklayer); annot.gff3 <- import.gff3("{input}"); save(annot.gff3, file="{output}")' > {log} 2>&1
+        """
+
+
+
+rule de_analysis_betareg_uniref90:
+    conda: "envs/deanalysis.yaml"
+    input:
+        counts="results/allSamples_uniref90.featureCounts",
+        gff_rda="results/reference_annotated.gff.rda",
+        meta_data="input/meta_data.xlsx"
+    output:
+        "results/de_analysis_betareg_uniref90.html"
+    threads: 120
+    # log: "logs/de_analysis_betareg_uniref90.log"
+    params:
+        min_counts=6,
+        min_samples=6,
+    script:
+        "scripts/de_analysis_betareg.Rmd"
+
+rule test_rmd:
+    conda: "envs/deanalysis.yaml"
+    output:
+        "results/testme.html"
+    threads: 12
+    # log: "logs/test_de_analysis.log"
+    
+    script:
+        "scripts/testme.Rmd"

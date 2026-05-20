@@ -3,7 +3,7 @@
 
 ## Where to import the reference genome from
 #import_ref_dir: "/path to Prokka output to import/"
-import_ref_dir: "/export/dahlefs/work/Marie/sequences_novogen/X204SC23041757-Z01-F001/15.PROKKA_METAGENOME"
+import_ref_dir: "/Data/cbu/cbudahlefs/work/Marie/sequences_novogen/X204SC23041757-Z01-F001/15.PROKKA_METAGENOME"
 # import_ref_dir: "/export/dahlefs/work/Hakon/RASTOOLS/RNA_2024/14.MAG_ANNOTATION"
 
 ## skip the following directories:
@@ -11,6 +11,7 @@ import_ref_exclude:
   - d_1_7
   # - other samples/directories
 reference_fasta: "input/reference/reference.fasta"
+# use the annotated UniRef90 database for annotation
 reference_gff: "input/reference/reference.gff"
 
 ## select a prefix for files to import
@@ -28,7 +29,7 @@ metaquast_refs:
  - GCA_022842015.1
 
 ## A sample sheet with annotation for all the smaples to be used
-sample_sheet: "config/sample_sheet.tsv"
+# sample_sheet: "config/sample_sheet.tsv"
 
 ## The filename suffix for fastq files: fastq, fq, fastq.gz, or fq.gz
 fastq_file_suffix: ".fq.gz"
