@@ -98,7 +98,7 @@ def get_reference_fastas(refdir):
     print ("Excluding directories: "+ str(to_exclude))
     for di in os.listdir(refdir):
         print("looking into directory "+di)
-        if (di in to_exclude):
+        if (to_exclude and di in to_exclude):
             print(" - excluding: "+ di + " from reference import" )
             continue
         if (os.path.isdir(os.path.join(refdir,di))):            
@@ -119,34 +119,35 @@ if(refdir):
 
     
 
-"""
-
-### These rules are deliberately detached from the rest of the workflow because the contig renaming is
-### very setup-specific.
-### The importer can merge multiple genome annotations into one.
-### We assume here that the annotation files are bundled in a separate subdirectory of the import directory each,
-### one directory per sample or MAG. The directory name determines the genome prefix.
-### A single file with the extension .fna and gff are expected per genome/MAG
-
-"""
-
+# These rules are deliberately detached from the rest of the workflow because the contig renaming is
+# very setup-specific.
+# The importer can merge multiple genome annotations into one.
+# We assume here that the annotation files are bundled in a separate subdirectory of the import directory each,
+# one directory per sample or MAG. The directory name determines the genome prefix.
+# A single file with the extension .fna and gff are expected per genome/MAG.
+#
+# These rules are NOT referenced by `rule all`, so they will only run when their outputs
+# are requested explicitly, e.g.:
+#     snakemake --cores 8 input/reference/reference.gff
 rule import_reference:
     conda: "envs/agat.yaml"
     input: fnas=expand("input/reference/renamed-{sample}-contigs-{fna}", zip, sample=ref_fnas['samples'], fna=ref_fnas['fnas']),
            faas=expand(refdir+"/{sample}/{faa}", zip, sample=ref_fnas['samples'], faa=ref_fnas['faas']),
            gffs=expand("input/reference/renamed-{sample}-annotation-{gff}", zip, sample=ref_fnas['samples'], gff=ref_fnas['gffs'])
-    output: ".reference_imported" # [REF_FASTA, REF_GFF] ## This is left empty to prevent automatic invocation by the main WF
+    output:
+        fasta=protected("input/reference/reference.fasta"),
+        proteins=protected("input/reference/proteins.fasta"),
+        gff=protected("input/reference/reference.gff"),
     log: "logs/agat_sp_merge_annotations.log"
-    message: "Importing reference files {input}, renaming contigs and merging GFF files. See the log for potential problems: {log}" 
+    message: "Importing reference files {input}, renaming contigs and merging GFF files. See the log for potential problems: {log}"
     shell:
         r"""
-        cat {input.fnas} > input/reference/reference.fasta
-        cat {input.faas} > input/reference/proteins.fasta
+        cat {input.fnas} > {output.fasta}
+        cat {input.faas} > {output.proteins}
         gffs=( {input.gffs} )
         gffs=( "${{gffs[@]/#/ --gff }}" )
-	rm -f input/reference/reference.gff # agat won't overwrite
-        agat_sp_merge_annotations.pl ${{gffs[@]}} --out input/reference/reference.gff > {log} 2>&1
-        touch .reference_imported
+        rm -f {output.gff} # agat won't overwrite
+        agat_sp_merge_annotations.pl ${{gffs[@]}} --out {output.gff} > {log} 2>&1
         """
 
 
@@ -180,7 +181,7 @@ REFS = config['metaquast_refs']
 rule metaquast:
     conda: "envs/metaquast.yaml",
     input:
-        assm="input/reference/reference.fasta",
+        assm=ancient("input/reference/reference.fasta"),
         refs=expand("ncbi_dataset/data/{ref}.fna", ref=REFS)
     output:
         directory("results/metaQUAST")
@@ -240,6 +241,7 @@ rule multiqc:
 
 rule sortmerna_pe:
     input:
+        ".setup_done",
         reads=["fastp/{sample}_1.trimmed.fq.gz", "fastp/{sample}_2.trimmed.fq.gz"],
         ref=["rRNA_databases_v4/smr_v4.3_default_db.fasta"]
     output:
@@ -266,7 +268,7 @@ rule sortmerna_pe:
         
 rule minimap2_index:
     input:
-        target=REF_FASTA
+        target=ancient(REF_FASTA)
     output:
         "{input1}.mmi"
     log:
@@ -281,7 +283,7 @@ rule minimap2_index:
         
 rule minimap2_bam_sorted:
     input:
-        target=REF_FASTA + ".mmi",  # can be either genome index or genome fasta
+        target=ancient(REF_FASTA + ".mmi"),  # can be either genome index or genome fasta
         query=["sortmerna/{sample}_filtered_1.fq.gz", "sortmerna/{sample}_filtered_2.fq.gz"],
     output:
         "aligned/{sample}.aln.sorted.bam",
@@ -315,7 +317,7 @@ rule feature_counts_s2:
     input:
         # list of sam or bam files
         samples=expand("aligned/{sample}.aln.sorted.bam", sample=SAMPLES),
-        annotation=REF_GFF,
+        annotation=ancient(REF_GFF),
         # optional input
         #chr_names="",           # implicitly sets the -A flag
         #fasta="genome.fasta"    # implicitly sets the -G flag
@@ -339,7 +341,7 @@ rule feature_counts_uniref90:
     input:
         # list of sam or bam files
         samples=expand("aligned/{sample}.aln.sorted.bam", sample=SAMPLES),
-        annotation="results/reference_annotated.gff",
+        annotation=ancient("results/reference_annotated.gff"),
         # optional input
         #chr_names="",           # implicitly sets the -A flag
         #fasta="genome.fasta"    # implicitly sets the -G flag
@@ -365,8 +367,8 @@ rule DE_analysis:
     conda: "envs/deanalysis.yaml"
     input:
         counts="results/allSamples.featureCounts",
-        gff=REF_GFF,
-        meta_data="input/meta_data.xlsx"
+        gff=ancient(REF_GFF),
+        meta_data="config/meta_data.xlsx"
     output:
         "results/de_analysis.html"
     threads: 12
@@ -381,7 +383,7 @@ rule DE_analysis_uniref90:
     conda: "envs/deanalysis.yaml"
     input:
         counts="results/allSamples_uniref90.featureCounts",
-        gff="results/reference_annotated.gff",
+        gff=ancient("results/reference_annotated.gff"),
         meta_data="input/meta_data.xlsx"
     output:
         "results/de_analysis_uniref90.html"
@@ -396,7 +398,7 @@ rule DE_analysis_uniref90:
 # Speed up loading of the reference annotation in R by saving it as an RDA file after loading it once with GenomicFeatures. This is especially helpful if the annotation is large and needs to be loaded multiple times in downstream analysis.
 rule load_reference_annotation:
     input:
-        "results/reference_annotated.gff"
+        ancient("results/reference_annotated.gff")
     output:
         "results/reference_annotated.gff.rda"
     conda: "envs/deanalysis.yaml"

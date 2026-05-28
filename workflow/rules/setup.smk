@@ -5,21 +5,20 @@ REFS = config['metaquast_refs']
 
 
 rule setup:
-    input: dir="rRNA_databases_v4/",
+    input: dir="rRNA_databases_v4/smr_v4.3_default_db.fasta",
            data=expand("ncbi_dataset/data/{ref}.fna", ref=REFS)
     output: ".setup_done"
     shell:
         r"""
         echo {input.data}
         mkdir -p fastp sortmerna aligned misc multiqc_report \
-        featurecounts results benchmarks logs \
-        && touch .setup_done
+        featurecounts results benchmarks logs 
         """
 
 
 rule dowload_sortmeRNA_reference:
     output:
-        directory("rRNA_databases_v4")
+        "rRNA_databases_v4/smr_v4.3_default_db.fasta"
     shell:
         r"""
         wget -c https://github.com/biocore/sortmerna/releases/download/v4.3.4/database.tar.gz
