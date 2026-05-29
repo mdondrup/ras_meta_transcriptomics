@@ -1,0 +1,7 @@
+name: setup
+channels:
+  - conda-forge
+dependencies:
+  - ca-certificates=2026.5.20=hbd8a1cb_0
+  - ncbi-datasets-cli=18.29.1=ha770c72_0
+

@@ -31,7 +31,7 @@ rule dowload_sortmeRNA_reference:
         
         
 rule download_metaquast_references:
-    conda: "../envs/metaquast.yaml"
+    conda: "../envs/setup.yaml"
     output:
         expand("ncbi_dataset/data/{ref}.fna", ref=REFS)
     params:
