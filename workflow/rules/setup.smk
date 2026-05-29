@@ -7,7 +7,7 @@ REFS = config['metaquast_refs']
 rule setup:
     input: dir="rRNA_databases_v4/smr_v4.3_default_db.fasta",
            data=expand("ncbi_dataset/data/{ref}.fna", ref=REFS)
-    output: ".setup_done"
+    output: touch(".setup_done")
     shell:
         r"""
         echo {input.data}
