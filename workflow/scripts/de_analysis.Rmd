@@ -171,7 +171,8 @@ colnames(df) <- nams
 df
 write.table(df, file = "results/Time.sig.GOI", quote=F, sep = "\t")
 #View(df)
-
+save(snakemake, file='de_analysis.restart.rda')
+dbg("saved snakemake object to de_analysis.restart.rda")
 
 ```
 Plot the genes of interest:
