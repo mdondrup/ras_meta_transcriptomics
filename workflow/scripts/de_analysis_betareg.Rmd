@@ -1,0 +1,162 @@
+---
+title: "RAS Meta-transcriptmics with Beta Regression"
+author: Michael Dondrup
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+params:
+   rmd: "de_analysis_betareg.Rmd"
+output:
+  html_document:
+  highlight: tango
+  number_sections: no
+  theme: default
+  toc: yes
+  toc_depth: 3
+  toc_float:
+    collapsed: no
+    smooth_scroll: yes
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r echo=TRUE, warning=FALSE}
+library(betareg)
+library(rtracklayer)
+library(kableExtra)
+library(BiocParallel)
+library(readxl)
+```
+
+
+```{r}
+cat("Starting DE analysis with Beta Regression\n", file=stderr())
+if (!exists('snakemake'))
+  load('de_analysis.restart.rda', envir = parent.frame(), verbose = FALSE)
+min.counts <- snakemake@params[["min_counts"]]
+min.samples <- snakemake@params[["min_samples"]]
+nthreads <- snakemake@threads
+meta.data.path <- snakemake@input[["meta_data"]]
+feature.count.path <- snakemake@input[["counts"]]
+gff.rda.path <- snakemake@input[["gff_rda"]]
+GOI <- c("") # Genes Of Interest
+save(snakemake, file='de_analysis.restart.rda')
+raw.counts <- read.delim(file=feature.count.path, comment.char = "#")
+raw.mat <- as.matrix(raw.counts[-1:-6],rownames.force = T)
+row.names(raw.mat) <- raw.counts$Geneid
+dim(raw.mat)
+summary(raw.mat)
+zero.pct <- 100*sum(raw.mat == 0)/prod(dim(raw.mat))
+
+cat(paste(zero.pct, "% zero unfiltered: \n"), file=stderr())
+zero.pct
+sum(rowSums(raw.mat) < 1)
+sum(colSums(raw.mat) <1 )
+raw.mat <- raw.mat[rowSums(raw.mat) >= min.counts, ]
+raw.mat <- raw.mat[rowSums(raw.mat >= min.counts) >= min.samples, ] # at least two samples
+dim(raw.mat)
+zero.pct <- 100*sum(raw.mat == 0)/prod(dim(raw.mat))
+cat(paste(zero.pct, "% zero in filtered raw counts: \n"), file=stderr())
+zero.pct
+# fix colnames
+colnames(raw.mat) <- gsub("aligned.|.aln.sorted.bam", "", colnames(raw.mat))
+
+#View(raw.mat)
+```
+Read the annotation data from a GFF file and check for presence of POIs
+```{r}
+cat("Loading reference annotation from RDA file", gff.rda.path, "\n", file=stderr())
+load(gff.rda.path)
+
+# restrict annotation search to type CDS
+```
+
+
+
+Read and process sampling sheet
+```{r}
+cat("Reading metadata from", meta.data.path, "\n", file=stderr())
+meta.data <- read_excel(meta.data.path, n_max = 37)
+col.data <- as.data.frame(meta.data)
+colnames(col.data) <- make.names(colnames(meta.data)) # fix colnames so they can be used in formula
+
+col.data$Sampling.date <- as.factor(col.data$Sampling.date)
+col.data$Sampling.Time <- as.factor(col.data$Sampling.Time)
+
+
+col.data[,"Treatment"] <- as.factor(col.data$Treatment..targeted.alkalinity.)
+raw.mat <- raw.mat[,col.data$Sample.ID] # reorder data columns in the order of rows in the sample sheet
+cat("Column names of metadata:\n", file=stderr())
+cat(names(col.data), sep="\n", file=stderr())
+
+```
+
+Run DE analysis with Beta Regression
+using design = ~ Sampling.Time,
+```{r}
+cat("Calculating relative abundances and preparing data for Beta Regression\n", file=stderr())
+# calculate relative abundances
+rel.abund <- t(t(raw.mat)/colSums(raw.mat))
+rel.abund <- rel.abund[rowSums(rel.abund) > 0,]
+# Smithson-Verkuilen transformation to map values into open interval (0, 1)
+# Smithson, M. & Verkuilen, 
+# J. A better lemon squeezer? Maximum-likelihood regression with beta-distributed dependent variables.
+# Psychol. Methods 11, 54–71 (2006). DOI: 10.1037/1082-989X.11.1.54
+
+n.samp <- ncol(rel.abund)
+rel.abund <- (rel.abund * (n.samp - 1) + 0.5) / n.samp
+
+cat("Prepared data for Beta Regression. Starting model fitting...\n", file=stderr())
+cat("Using", nthreads, "threads\n", file=stderr())
+
+# Step 1: Fast pre-screen with Kruskal-Wallis to identify candidate genes
+cat("Pre-screening genes with Kruskal-Wallis test...\n", file=stderr())
+# Use BiocParallel to speed up the pre-screening step, 
+# setting tasks to 96 to avoid overwhelming the cluster with too many small jobs
+bp.param <- MulticoreParam(workers = nthreads, tasks=96)
+if (any(snakemake@params[["kruskal_walis_pre_screen"]])) {
+  cat("Kruskal-Wallis pre-screening enabled. Running tests...\n", file=stderr())
+  kw.pvals <- bplapply(seq_len(nrow(rel.abund)), function(i) {
+    tryCatch({
+      kruskal.test(as.numeric(rel.abund[i, ]) ~ col.data$Sampling.Time)$p.value
+    }, error = function(e) 1.0)
+  }, BPPARAM = bp.param)
+  kw.pvals <- unlist(kw.pvals)
+  # keep genes with KW p-value < 0.2 (liberal screen to avoid false negatives)
+  kw.candidates <- which(kw.pvals < 0.2)
+  cat("Pre-screen:", length(kw.candidates), "of", nrow(rel.abund),
+      "genes pass Kruskal-Wallis filter (p < 0.2)\n", file=stderr())
+
+  # Step 2: Run betareg only on candidate genes
+  rel.abund.cand <- rel.abund[kw.candidates, , drop = FALSE]
+
+} else {
+  cat("Kruskal-Wallis pre-screening disabled. Skipping to Beta Regression on all genes.\n", file=stderr())
+  rel.abund.cand <- rel.abund
+} 
+
+betareg.results <- bplapply(seq_len(nrow(rel.abund.cand)), function(i) {
+  gene.name <- rownames(rel.abund.cand)[i]
+  gene.data <- data.frame(rel_abund = as.numeric(rel.abund.cand[i, ]), col.data)
+  tryCatch({
+    model <- betareg::betareg(rel_abund ~ Sampling.Time, data = gene.data)
+    coefs <- as.data.frame(summary(model)$coefficients$mean)
+    coefs$GeneID <- gene.name
+    coefs$term <- rownames(coefs)
+    coefs
+  }, error = function(e) NULL)
+}, BPPARAM = bp.param)
+betareg.results <- do.call(rbind, betareg.results)
+# remove intercept rows, keep only Sampling.Time contrasts
+betareg.results <- betareg.results[betareg.results$term != "(Intercept)", ]
+betareg.results$adj.p.value <- p.adjust(betareg.results$`Pr(>|z|)`, method = "fdr")
+betareg.results <- betareg.results[order(betareg.results$`Pr(>|z|)`), ]
+cat("Beta regression complete:", nrow(betareg.results), "results\n", file=stderr())
+cat("Significant results (adj p < 0.05):", sum(betareg.results$adj.p.value < 0.05), "\n", file=stderr())
+cat("Top results:\n", file=stderr())
+print(head(betareg.results), file=stderr())
+save(betareg.results, file='results/betareg_results.rda')
+
+head(betareg.results)
+
+```
