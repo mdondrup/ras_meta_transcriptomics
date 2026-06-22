@@ -26,10 +26,15 @@ library(rtracklayer)
 library(kableExtra)
 library(BiocParallel)
 library(readxl)
+
+# Debug helper: writes to stderr() so messages appear in the Snakemake
+# console/log instead of being captured by knitr into the HTML document.
+dbg <- function(...) cat(..., "\n", file = stderr())
 ```
 
 
 ```{r}
+# Check if we are running in Snakemake or not, and if not, load the saved snakemake object to get the parameters and input paths.
 if (!exists('snakemake'))
   load('de_analysis.restart.rda', envir = parent.frame(), verbose = FALSE)
 min.counts <- snakemake@params[["min_counts"]]
@@ -40,22 +45,23 @@ feature.count.path <- snakemake@input[["counts"]]
 gff.path <- snakemake@input[["gff"]]
 GOI <- c("") # Genes Of Interest
 save(snakemake, file='de_analysis.restart.rda')
+dbg("saved snakemake object to de_analysis.restart.rda")
 raw.counts <- read.delim(file=feature.count.path, comment.char = "#")
 raw.mat <- as.matrix(raw.counts[-1:-6],rownames.force = T)
 row.names(raw.mat) <- raw.counts$Geneid
-dim(raw.mat)
-summary(raw.mat)
+dbg("Dimensions of raw.mat:", dim(raw.mat))
+dbg("Summary of raw.mat:", summary(raw.mat))
 zero.pct <- 100*sum(raw.mat == 0)/prod(dim(raw.mat))
 
-cat("% zero unfiltered: \n")
+dbg("% zero unfiltered:", zero.pct)
 zero.pct
 sum(rowSums(raw.mat) < 1)
 sum(colSums(raw.mat) <1 )
 raw.mat <- raw.mat[rowSums(raw.mat) >= min.counts, ]
 raw.mat <- raw.mat[rowSums(raw.mat >= min.counts) >= min.samples, ] # at least two samples
-dim(raw.mat)
+dbg("Dimensions of filtered raw.mat:", dim(raw.mat))
 zero.pct <- 100*sum(raw.mat == 0)/prod(dim(raw.mat))
-cat("% zero in filtered raw counts: \n")
+dbg("% zero in filtered raw counts:", zero.pct)
 zero.pct
 # fix colnames
 colnames(raw.mat) <- gsub("aligned.|.aln.sorted.bam", "", colnames(raw.mat))
@@ -64,6 +70,7 @@ colnames(raw.mat) <- gsub("aligned.|.aln.sorted.bam", "", colnames(raw.mat))
 ```
 Read the annotation data from a GFF file and check for presence of POIs
 ```{r}
+dbg("Importing annotation from", gff.path)
 annot.gff3 <- import.gff3(gff.path)
 
 # restrict annotation search to type CDS
@@ -94,6 +101,7 @@ har <- intersect(har,rownames(raw.mat))
 
 Read and process sampling sheet
 ```{r}
+dbg("Reading sample metadata from", meta.data.path)
 meta.data <- read_excel(meta.data.path, n_max = 37)
 col.data <- as.data.frame(meta.data)
 colnames(col.data) <- make.names(colnames(meta.data)) # fix colnames so they can be used in formula
@@ -104,14 +112,14 @@ col.data$Sampling.Time <- as.factor(col.data$Sampling.Time)
 
 col.data[,"Treatment"] <- as.factor(col.data$Treatment..targeted.alkalinity.)
 raw.mat <- raw.mat[,col.data$Sample.ID] # reorder data columns in the order of rows in the sample sheet
-print(names(col.data))
+dbg("Column names of col.data:", names(col.data))
 
 ```
 
 ```{r}
 
 register(MulticoreParam(workers=nthreads))
-
+dbg("Running DESeq2 with", nthreads, "threads")
 dds <- DESeqDataSetFromMatrix(countData = round(raw.mat),
                               colData = col.data,
                               #design= ~ RAS_system + Sampling.Time + RAS_system:Sampling.Time
@@ -119,7 +127,7 @@ dds <- DESeqDataSetFromMatrix(countData = round(raw.mat),
 															design= ~ Sampling.Time,
 															)
 dds <- DESeq(dds, parallel = TRUE)
-resultsNames(dds) # lists the coefficients
+dbg("Finished DESeq2; result names:", resultsNames(dds)) # lists the coefficients
 
 ```
 
@@ -152,6 +160,7 @@ filt.list <- lapply(my.res, goi.filter, annot.gff3)
 
 df <- data.frame()
 for (l in names(filt.list)){
+	if (nrow(filt.list[[l]]) == 0) next
 	df <- rbind(df,cbind(contrast=l,filt.list[[l]]))
 }
 df 

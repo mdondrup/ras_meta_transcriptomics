@@ -371,11 +371,11 @@ rule DE_analysis:
         meta_data="config/meta_data.xlsx"
     output:
         "results/de_analysis.html"
-    threads: 12
+    threads: 120
     log: "logs/de_analysis.log"
     params:
-        min_counts=1,
-        min_samples=1
+        min_counts=2,
+        min_samples=6,
     script:
         "scripts/de_analysis.Rmd"       
 
@@ -387,11 +387,11 @@ rule DE_analysis_uniref90:
         meta_data="input/meta_data.xlsx"
     output:
         "results/de_analysis_uniref90.html"
-    threads: 12
+    threads: 120
     log: "logs/de_analysis_uniref90.log"
     params:
-        min_counts=1,
-        min_samples=1
+        min_counts=2,
+        min_samples=6,
     script:
         "scripts/de_analysis_uniref90.Rmd"
 
