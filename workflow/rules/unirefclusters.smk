@@ -93,7 +93,7 @@ rule annotate_gff_with_uniref:
         gff="input/reference/reference.gff",
         mapping="results/uniref90_mapping.tsv"
     output:
-        gff="results/reference_annotated.gff"
+        gff=protected("results/reference_annotated.gff")
     message: "Adding uniref attribute to gff file"
     run:
         # Load UniRef90 mapping into a dictionary
